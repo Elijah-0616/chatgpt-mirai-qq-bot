@@ -299,7 +299,7 @@ class TextToSpeech(BaseModel):
     """文字转语音引擎选择，当前有azure和vits"""
     default: str = "zh-CN-XiaoxiaoNeural"
     """默认设置为Azure语音音色"""
-    default_voice_prefix: List[str] = ["zh-CN", "zh-TW"]
+    default_voice_prefix: List[str] = ["zh-CN", "zh-TW" ,"en-US", "en-GB"]
     """默认的提示音色前缀"""
 
 
