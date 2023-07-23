@@ -140,7 +140,7 @@ class ChatGPTAPIAdapter(BotAdapter):
         self.bot.api_key = self.api_info.api_key
         self.bot.proxy = self.api_info.proxy
         self.bot.conversation[self.session_id] = []
-        self.bot.engine = self.api_info.model
+        self.bot.engine = self.current_model
         self.__conversation_keep_from = 0
 
     def construct_data(self, messages: list = None, api_key: str = None, stream: bool = True):
@@ -172,7 +172,7 @@ class ChatGPTAPIAdapter(BotAdapter):
 
         headers, data = self.construct_data(messages, api_key, stream)
 
-        return api_key, proxy, api_endpoint, headers, data
+        return proxy, api_endpoint, headers, data
 
     async def _process_response(self, resp, session_id: str = None):
 
@@ -197,12 +197,12 @@ class ChatGPTAPIAdapter(BotAdapter):
         return content
 
     async def request(self, session_id: str = None, messages: list = None) -> str:
-        api_key, proxy, api_endpoint, headers, data = self._prepare_request(session_id, messages, stream=False)
+        proxy, api_endpoint, headers, data = self._prepare_request(session_id, messages, stream=False)
 
         async with aiohttp.ClientSession() as session:
             with async_timeout.timeout(self.bot.timeout):
                 async with session.post(f'{api_endpoint}/chat/completions', headers=headers,
-                                                    data=json.dumps(data)) as resp:
+                                                    data=json.dumps(data), proxy=proxy) as resp:
                     if resp.status != 200:
                         response_text = await resp.text()
                         raise Exception(
@@ -211,12 +211,18 @@ class ChatGPTAPIAdapter(BotAdapter):
                     return await self._process_response(resp, session_id)
 
     async def request_with_stream(self, session_id: str = None, messages: list = None) -> AsyncGenerator[str, None]:
-        api_key, proxy, api_endpoint, headers, data = self._prepare_request(session_id, messages, stream=True)
+        proxy, api_endpoint, headers, data = self._prepare_request(session_id, messages, stream=True)
 
         async with aiohttp.ClientSession() as session:
             with async_timeout.timeout(self.bot.timeout):
                 async with session.post(f'{api_endpoint}/chat/completions', headers=headers, data=json.dumps(data),
                                         proxy=proxy) as resp:
+                    if resp.status != 200:
+                        response_text = await resp.text()
+                        raise Exception(
+                            f"{resp.status} {resp.reason} {response_text}",
+                        )
+
                     response_role: str = ''
                     completion_text: str = ''
 
@@ -247,7 +253,7 @@ class ChatGPTAPIAdapter(BotAdapter):
                                 event_text = delta['content']
                                 completion_text += event_text
                                 self.latest_role = response_role
-                                yield completion_text
+                                yield event_text
         self.bot.add_to_conversation(completion_text, response_role, session_id)
 
     async def compressed_session(self, session_id: str):
@@ -288,12 +294,15 @@ class ChatGPTAPIAdapter(BotAdapter):
             self.bot.add_to_conversation(prompt, "user", session_id=self.session_id)
             start_time = time.time()
 
+            full_response = ''
+
             if config.openai.gpt_params.stream:
-                async for completion_text in self.request_with_stream(session_id=self.session_id):
-                    yield completion_text
+                async for resp in self.request_with_stream(session_id=self.session_id):
+                    full_response += resp
+                    yield full_response
 
                 token_count = self.bot.count_tokens(self.session_id, self.bot.engine)
-                logger.debug(f"[ChatGPT-API:{self.bot.engine}] 响应：{completion_text}")
+                logger.debug(f"[ChatGPT-API:{self.bot.engine}] 响应：{full_response}")
                 logger.debug(f"[ChatGPT-API:{self.bot.engine}] 使用 token 数：{token_count}")
             else:
                 yield await self.request(session_id=self.session_id)
@@ -304,6 +313,7 @@ class ChatGPTAPIAdapter(BotAdapter):
         except Exception as e:
             logger.error(f"[ChatGPT-API:{self.bot.engine}] 请求失败：\n{e}")
             yield f"发生错误: \n{e}"
+            raise
 
     async def preset_ask(self, role: str, text: str):
         self.bot.engine = self.current_model
